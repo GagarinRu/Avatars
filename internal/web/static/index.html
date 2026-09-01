@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Avatars</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.5rem; }
+    label { display: block; margin-top: 1rem; font-weight: 600; }
+    input[type="text"], input[type="file"] { width: 100%; margin-top: 0.25rem; }
+    .actions { margin-top: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    button { padding: 0.5rem 1rem; cursor: pointer; }
+    #status { margin-top: 1.5rem; padding: 1rem; background: #f4f4f5; border-radius: 8px; white-space: pre-wrap; }
+    #preview { margin-top: 1rem; }
+    #preview img { max-width: 128px; border-radius: 8px; border: 1px solid #ddd; }
+    .error { color: #b91c1c; }
+  </style>
+</head>
+<body>
+  <h1>Avatars</h1>
+  <p>Загрузка, просмотр и удаление аватарок пользователя.</p>
+
+  <label for="userId">User ID</label>
+  <input id="userId" type="text" value="user-1" placeholder="user-1">
+
+  <label for="file">Файл (PNG, JPEG, WebP)</label>
+  <input id="file" type="file" accept=".png,.jpg,.jpeg,.webp,image/*">
+
+  <div class="actions">
+    <button type="button" id="uploadBtn">Загрузить</button>
+    <button type="button" id="refreshBtn">Обновить</button>
+    <button type="button" id="deleteBtn">Удалить</button>
+  </div>
+
+  <div id="status">Выберите user_id и файл, затем нажмите «Загрузить».</div>
+  <div id="preview"></div>
+
+  <script>
+    const userIdEl = document.getElementById('userId');
+    const fileEl = document.getElementById('file');
+    const statusEl = document.getElementById('status');
+    const previewEl = document.getElementById('preview');
+
+    function apiPath() {
+      const id = userIdEl.value.trim();
+      if (!id) throw new Error('Укажите user_id');
+      return '/api/avatars/' + encodeURIComponent(id);
+    }
+
+    function setStatus(text, isError) {
+      statusEl.textContent = text;
+      statusEl.className = isError ? 'error' : '';
+    }
+
+    function renderPreview(data) {
+      previewEl.innerHTML = '';
+      if (data.status === 'ready' && data.thumbnail_url) {
+        const img = document.createElement('img');
+        img.src = data.thumbnail_url;
+        img.alt = 'avatar';
+        previewEl.appendChild(img);
+      }
+    }
+
+    async function refresh() {
+      try {
+        const res = await fetch(apiPath());
+        const body = await res.text();
+        if (res.status === 404) {
+          setStatus('Аватарка не найдена (404)');
+          previewEl.innerHTML = '';
+          return;
+        }
+        if (!res.ok) throw new Error(body || res.statusText);
+        const data = JSON.parse(body);
+        setStatus(JSON.stringify(data, null, 2));
+        renderPreview(data);
+        return data;
+      } catch (e) {
+        setStatus('Ошибка: ' + e.message, true);
+      }
+    }
+
+    async function upload() {
+      const file = fileEl.files[0];
+      if (!file) {
+        setStatus('Выберите файл', true);
+        return;
+      }
+      const form = new FormData();
+      form.append('file', file);
+      try {
+        const res = await fetch(apiPath(), { method: 'POST', body: form });
+        const body = await res.text();
+        if (!res.ok) throw new Error(body || res.statusText);
+        setStatus('Загружено (202):\n' + body);
+        previewEl.innerHTML = '';
+        pollUntilReady();
+      } catch (e) {
+        setStatus('Ошибка загрузки: ' + e.message, true);
+      }
+    }
+
+    async function pollUntilReady() {
+      for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 1000));
+        const data = await refresh();
+        if (data && (data.status === 'ready' || data.status === 'failed')) return;
+      }
+      setStatus('Обработка занимает больше времени. Нажмите «Обновить».', true);
+    }
+
+    async function remove() {
+      try {
+        const res = await fetch(apiPath(), { method: 'DELETE' });
+        if (res.status === 204) {
+          setStatus('Удалено (204)');
+          previewEl.innerHTML = '';
+          return;
+        }
+        const body = await res.text();
+        throw new Error(body || res.statusText);
+      } catch (e) {
+        setStatus('Ошибка удаления: ' + e.message, true);
+      }
+    }
+
+    document.getElementById('uploadBtn').addEventListener('click', upload);
+    document.getElementById('refreshBtn').addEventListener('click', refresh);
+    document.getElementById('deleteBtn').addEventListener('click', remove);
+  </script>
+</body>
+</html>
