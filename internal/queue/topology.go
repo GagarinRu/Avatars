@@ -10,7 +10,11 @@ func Declare(ch *amqp.Channel) error {
 		return err
 	}
 
-	if _, err := ch.QueueDeclare(QueueProcessing, true, false, false, false, nil); err != nil {
+	processingArgs := amqp.Table{
+		"x-dead-letter-exchange":    ExchangeDLX,
+		"x-dead-letter-routing-key": RoutingDLQ,
+	}
+	if _, err := ch.QueueDeclare(QueueProcessing, true, false, false, false, processingArgs); err != nil {
 		return err
 	}
 	if err := ch.QueueBind(QueueProcessing, RoutingRetry, ExchangeDLX, false, nil); err != nil {

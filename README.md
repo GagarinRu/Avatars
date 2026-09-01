@@ -33,7 +33,7 @@ Avatars — HTTP API для загрузки, просмотра и удален
 - **RabbitMQ** — асинхронная обработка (DLX, retry, DLQ).
 - **MinIO** — S3-хранилище файлов.
 - **net/http ServeMux** — HTTP router (Go 1.22+).
-- **golang-migrate** — миграции схемы БД.
+- **golang-migrate** — миграции схемы БД (сервис `migrate` в Compose).
 - **aws-sdk-go** — S3 API для MinIO.
 - **zap** — структурированное логирование.
 - **Docker Compose** — локальная инфраструктура.
@@ -133,6 +133,7 @@ curl -X DELETE http://localhost:8080/api/avatars/user-1
 
 ```bash
 docker compose up -d avatars_db rabbitmq minio minio_init
+docker compose run --rm migrate
 
 go run ./cmd/api
 go run ./cmd/worker
@@ -175,6 +176,7 @@ internal/
   web/             — веб-интерфейс
 migrations/        — SQL-миграции
 scripts/minio-init/ — init-образ: создание S3 bucket при старте compose
+docker-compose.yml   — сервис migrate: применение SQL-миграций перед api/worker
 ```
 
 

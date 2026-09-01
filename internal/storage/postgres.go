@@ -4,17 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/GagarinRu/avatars/internal/logger"
 	"github.com/GagarinRu/avatars/internal/models"
-	"github.com/golang-migrate/migrate/v4"
-	"github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
 	_ "github.com/lib/pq"
-	"go.uber.org/zap"
 )
 
 type PostgresStorage struct {
@@ -26,38 +20,12 @@ func NewPostgresStorage(dsn string) (*PostgresStorage, error) {
 	if err != nil {
 		return nil, err
 	}
-	ps := &PostgresStorage{db: db}
-	if err := ps.applyMigrations(); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	logger.Log.Info("Connected to PostgreSQL and applied migrations")
-	return ps, nil
-}
-
-func (ps *PostgresStorage) applyMigrations() error {
-	wd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	migrationsPath := filepath.ToSlash(wd) + "/migrations"
-	driver, err := postgres.WithInstance(ps.db, &postgres.Config{})
-	if err != nil {
-		return err
-	}
-	m, err := migrate.NewWithDatabaseInstance("file://"+migrationsPath, "postgres", driver)
-	if err != nil {
-		return err
-	}
-	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		logger.Log.Error("Failed to apply migrations", zap.Error(err))
-		return err
-	}
-	return nil
+	logger.Log.Info("Connected to PostgreSQL")
+	return &PostgresStorage{db: db}, nil
 }
 
 func (ps *PostgresStorage) Close() error {

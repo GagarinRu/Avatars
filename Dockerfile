@@ -14,7 +14,6 @@ FROM alpine:3.21 AS api
 RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=builder /out/avatars-api /app/avatars-api
-COPY migrations /app/migrations
 EXPOSE 8080
 ENTRYPOINT ["/app/avatars-api"]
 
@@ -22,5 +21,4 @@ FROM alpine:3.21 AS worker
 RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=builder /out/avatars-worker /app/avatars-worker
-COPY migrations /app/migrations
 ENTRYPOINT ["/app/avatars-worker"]
