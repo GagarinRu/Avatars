@@ -13,6 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type Client struct {
@@ -47,6 +49,9 @@ func NewClient(cfg Config) (*Client, error) {
 }
 
 func (c *Client) Upload(ctx context.Context, key string, reader io.Reader, contentType string) error {
+	ctx, span := otel.Tracer("avatars-s3").Start(ctx, "s3.put_object")
+	defer span.End()
+	span.SetAttributes(attribute.String("s3.key", key), attribute.String("s3.operation", "put"))
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return fmt.Errorf("read upload body: %w", err)
@@ -64,6 +69,9 @@ func (c *Client) Upload(ctx context.Context, key string, reader io.Reader, conte
 }
 
 func (c *Client) Download(ctx context.Context, key string) ([]byte, error) {
+	ctx, span := otel.Tracer("avatars-s3").Start(ctx, "s3.get_object")
+	defer span.End()
+	span.SetAttributes(attribute.String("s3.key", key), attribute.String("s3.operation", "get"))
 	out, err := c.client.GetObjectWithContext(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(key),
@@ -80,6 +88,9 @@ func (c *Client) Download(ctx context.Context, key string) ([]byte, error) {
 }
 
 func (c *Client) Delete(ctx context.Context, keys ...string) error {
+	ctx, span := otel.Tracer("avatars-s3").Start(ctx, "s3.delete_object")
+	defer span.End()
+	span.SetAttributes(attribute.String("s3.operation", "delete"))
 	for _, key := range keys {
 		if key == "" {
 			continue

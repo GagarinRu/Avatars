@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
 	"time"
 
-	"github.com/GagarinRu/avatars/internal/logger"
+	"github.com/GagarinRu/avatars/internal/metrics"
 	"github.com/GagarinRu/avatars/internal/models"
 	_ "github.com/lib/pq"
+	"go.opentelemetry.io/otel"
 )
 
 type PostgresStorage struct {
@@ -24,8 +26,13 @@ func NewPostgresStorage(dsn string) (*PostgresStorage, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	logger.Log.Info("Connected to PostgreSQL")
+	slog.Info("Connected to PostgreSQL")
+	metrics.DBConnectionsOpen.Set(float64(db.Stats().OpenConnections))
 	return &PostgresStorage{db: db}, nil
+}
+
+func (ps *PostgresStorage) RecordDBStats() {
+	metrics.DBConnectionsOpen.Set(float64(ps.db.Stats().OpenConnections))
 }
 
 func (ps *PostgresStorage) Close() error {
@@ -37,6 +44,9 @@ func (ps *PostgresStorage) Ping(ctx context.Context) error {
 }
 
 func (ps *PostgresStorage) UpsertAvatar(ctx context.Context, avatar *models.Avatar) error {
+	ctx, span := otel.Tracer("avatars-db").Start(ctx, "upsert_avatar")
+	defer span.End()
+	ps.RecordDBStats()
 	now := time.Now().UTC()
 	if avatar.CreatedAt.IsZero() {
 		avatar.CreatedAt = now
@@ -67,6 +77,9 @@ func (ps *PostgresStorage) UpsertAvatar(ctx context.Context, avatar *models.Avat
 }
 
 func (ps *PostgresStorage) GetAvatar(ctx context.Context, userID string) (*models.Avatar, error) {
+	ctx, span := otel.Tracer("avatars-db").Start(ctx, "get_avatar")
+	defer span.End()
+	ps.RecordDBStats()
 	row := ps.db.QueryRowContext(ctx, `
 		SELECT user_id, status, staging_key, original_key, thumbnail_key,
 			content_type, size_bytes, width, height, COALESCE(error_message,''), message_id,
@@ -77,6 +90,9 @@ func (ps *PostgresStorage) GetAvatar(ctx context.Context, userID string) (*model
 }
 
 func (ps *PostgresStorage) DeleteAvatar(ctx context.Context, userID string) error {
+	ctx, span := otel.Tracer("avatars-db").Start(ctx, "delete_avatar")
+	defer span.End()
+	ps.RecordDBStats()
 	res, err := ps.db.ExecContext(ctx, `DELETE FROM avatars WHERE user_id = $1`, userID)
 	if err != nil {
 		return err
@@ -92,6 +108,9 @@ func (ps *PostgresStorage) DeleteAvatar(ctx context.Context, userID string) erro
 }
 
 func (ps *PostgresStorage) UpdateAvatarStatus(ctx context.Context, userID string, status models.ProcessingStatus, errMsg string) error {
+	ctx, span := otel.Tracer("avatars-db").Start(ctx, "update_avatar_status")
+	defer span.End()
+	ps.RecordDBStats()
 	_, err := ps.db.ExecContext(ctx, `
 		UPDATE avatars SET status = $2, error_message = $3, updated_at = $4 WHERE user_id = $1
 	`, userID, status, nullString(errMsg), time.Now().UTC())
@@ -99,6 +118,9 @@ func (ps *PostgresStorage) UpdateAvatarStatus(ctx context.Context, userID string
 }
 
 func (ps *PostgresStorage) MarkAvatarReady(ctx context.Context, userID, originalKey, thumbKey, contentType string, size int64, width, height int) error {
+	ctx, span := otel.Tracer("avatars-db").Start(ctx, "mark_avatar_ready")
+	defer span.End()
+	ps.RecordDBStats()
 	_, err := ps.db.ExecContext(ctx, `
 		UPDATE avatars SET
 			status = $2, original_key = $3, thumbnail_key = $4, content_type = $5,
@@ -110,6 +132,9 @@ func (ps *PostgresStorage) MarkAvatarReady(ctx context.Context, userID, original
 }
 
 func (ps *PostgresStorage) IsMessageProcessed(ctx context.Context, messageID string) (bool, error) {
+	ctx, span := otel.Tracer("avatars-db").Start(ctx, "is_message_processed")
+	defer span.End()
+	ps.RecordDBStats()
 	var exists bool
 	err := ps.db.QueryRowContext(ctx, `
 		SELECT EXISTS(SELECT 1 FROM processed_messages WHERE message_id = $1)
@@ -118,6 +143,9 @@ func (ps *PostgresStorage) IsMessageProcessed(ctx context.Context, messageID str
 }
 
 func (ps *PostgresStorage) MarkMessageProcessed(ctx context.Context, messageID string) error {
+	ctx, span := otel.Tracer("avatars-db").Start(ctx, "mark_message_processed")
+	defer span.End()
+	ps.RecordDBStats()
 	_, err := ps.db.ExecContext(ctx, `
 		INSERT INTO processed_messages (message_id, processed_at) VALUES ($1, $2)
 		ON CONFLICT (message_id) DO NOTHING

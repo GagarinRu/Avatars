@@ -7,6 +7,8 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/GagarinRu/avatars/internal/storage"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type Idempotency struct {
@@ -58,6 +60,10 @@ func (c *Consumer) Consume(ctx context.Context, handler DeliveryHandler) error {
 }
 
 func (c *Consumer) handleDelivery(ctx context.Context, handler DeliveryHandler, d amqp.Delivery) {
+	msgCtx := ExtractTraceContext(ctx, d.Headers)
+	msgCtx, span := otel.Tracer("avatars-queue").Start(msgCtx, "consume_avatar_process")
+	defer span.End()
+
 	var msg AvatarProcessMessage
 	if err := json.Unmarshal(d.Body, &msg); err != nil {
 		_ = d.Nack(false, false)
@@ -66,7 +72,11 @@ func (c *Consumer) handleDelivery(ctx context.Context, handler DeliveryHandler, 
 	if msg.MessageID == "" {
 		msg.MessageID = d.MessageId
 	}
-	processed, err := c.idem.IsProcessed(ctx, msg.MessageID)
+	span.SetAttributes(
+		attribute.String("user_id", msg.UserID),
+		attribute.String("message_id", msg.MessageID),
+	)
+	processed, err := c.idem.IsProcessed(msgCtx, msg.MessageID)
 	if err != nil {
 		_ = d.Nack(false, true)
 		return
@@ -75,7 +85,7 @@ func (c *Consumer) handleDelivery(ctx context.Context, handler DeliveryHandler, 
 		_ = d.Ack(false)
 		return
 	}
-	if err := handler(ctx, msg, d); err != nil {
+	if err := handler(msgCtx, msg, d); err != nil {
 		retry := RetryCount(d.Headers) + 1
 		if pubErr := SendToRetry(c.ch, d.Body, retry); pubErr != nil {
 			_ = d.Nack(false, true)
@@ -84,7 +94,7 @@ func (c *Consumer) handleDelivery(ctx context.Context, handler DeliveryHandler, 
 		_ = d.Ack(false)
 		return
 	}
-	if err := c.idem.MarkProcessed(ctx, msg.MessageID); err != nil {
+	if err := c.idem.MarkProcessed(msgCtx, msg.MessageID); err != nil {
 		_ = d.Nack(false, true)
 		return
 	}

@@ -1,0 +1,26 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+rule_files:
+  - /etc/prometheus/prometheus-alerts.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['prometheus:9090']
+
+  - job_name: avatars-api
+    static_configs:
+      - targets: ['api:8080']
+    metrics_path: /metrics
+
+  - job_name: avatars-worker
+    static_configs:
+      - targets: ['worker:9091']
+    metrics_path: /metrics

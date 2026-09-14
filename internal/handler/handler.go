@@ -13,10 +13,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GagarinRu/avatars/internal/metrics"
 	"github.com/GagarinRu/avatars/internal/models"
 	"github.com/GagarinRu/avatars/internal/queue"
 	"github.com/GagarinRu/avatars/internal/storage"
+	"github.com/GagarinRu/avatars/internal/telemetry"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type ObjectStore interface {
@@ -81,14 +85,27 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	status := "success"
+	defer func() {
+		metrics.UploadsTotal.WithLabelValues(status).Inc()
+		metrics.UploadDuration.WithLabelValues(status).Observe(time.Since(start).Seconds())
+	}()
+
+	ctx, span := otel.Tracer("avatars-api").Start(r.Context(), "upload_avatar")
+	defer span.End()
+	log := telemetry.LoggerFromContext(ctx)
+
 	userID := strings.TrimSpace(r.PathValue("user_id"))
 	if userID == "" {
+		status = "error"
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "user_id required"})
 		return
 	}
 	const multipartOverhead = 1024
 	r.Body = http.MaxBytesReader(w, r.Body, h.maxUpload+multipartOverhead)
 	if err := r.ParseMultipartForm(h.maxUpload); err != nil {
+		status = "error"
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "request too large"})
@@ -99,6 +116,7 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
+		status = "error"
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "file field required"})
 		return
 	}
@@ -107,18 +125,22 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
 	limited := io.LimitReader(file, h.maxUpload+1)
 	data, err := io.ReadAll(limited)
 	if err != nil {
+		status = "error"
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "failed to read file"})
 		return
 	}
 	if len(data) == 0 {
+		status = "error"
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "empty file"})
 		return
 	}
 	if int64(len(data)) > h.maxUpload {
+		status = "error"
 		writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "file too large"})
 		return
 	}
 	if !allowedExtension(header.Filename) {
+		status = "error"
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "unsupported file extension"})
 		return
 	}
@@ -126,8 +148,20 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
 	messageID := uuid.NewString()
 	stagingKey := fmt.Sprintf("staging/%s/%s", userID, messageID)
 	contentType := detectContentType(data, header.Filename)
+	span.SetAttributes(
+		attribute.String("user_id", userID),
+		attribute.String("file_name", header.Filename),
+		attribute.Int64("file_size", int64(len(data))),
+		attribute.String("mime_type", contentType),
+	)
+	log.InfoContext(ctx, "uploading avatar",
+		"user_id", userID,
+		"file_size", len(data),
+		"mime_type", contentType,
+	)
 
-	if err := h.objects.Upload(r.Context(), stagingKey, bytes.NewReader(data), contentType); err != nil {
+	if err := h.objects.Upload(ctx, stagingKey, bytes.NewReader(data), contentType); err != nil {
+		status = "error"
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to store upload"})
 		return
 	}
@@ -138,8 +172,9 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
 		StagingKey: stagingKey,
 		MessageID:  messageID,
 	}
-	if err := h.store.UpsertAvatar(r.Context(), avatar); err != nil {
-		_ = h.objects.Delete(r.Context(), stagingKey)
+	if err := h.store.UpsertAvatar(ctx, avatar); err != nil {
+		status = "error"
+		_ = h.objects.Delete(ctx, stagingKey)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to save metadata"})
 		return
 	}
@@ -149,13 +184,15 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
 		UserID:     userID,
 		StagingKey: stagingKey,
 	}
-	if err := h.publisher.PublishAvatarProcess(r.Context(), msg); err != nil {
-		_ = h.objects.Delete(r.Context(), stagingKey)
-		_ = h.store.UpdateAvatarStatus(r.Context(), userID, models.StatusFailed, "failed to enqueue processing")
+	if err := h.publisher.PublishAvatarProcess(ctx, msg); err != nil {
+		status = "error"
+		_ = h.objects.Delete(ctx, stagingKey)
+		_ = h.store.UpdateAvatarStatus(ctx, userID, models.StatusFailed, "failed to enqueue processing")
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to enqueue processing"})
 		return
 	}
 
+	log.InfoContext(ctx, "avatar upload accepted", "user_id", userID, "message_id", messageID)
 	writeJSON(w, http.StatusAccepted, uploadResponse{
 		UserID:    userID,
 		Status:    models.StatusPending,

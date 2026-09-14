@@ -3,18 +3,22 @@ package main
 import (
 	"context"
 	"flag"
+	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
 	"syscall"
+	"time"
 
 	"github.com/GagarinRu/avatars/internal/config"
-	"github.com/GagarinRu/avatars/internal/logger"
+	"github.com/GagarinRu/avatars/internal/metrics"
 	"github.com/GagarinRu/avatars/internal/objectstore"
 	"github.com/GagarinRu/avatars/internal/queue"
 	"github.com/GagarinRu/avatars/internal/storage"
+	"github.com/GagarinRu/avatars/internal/telemetry"
 	"github.com/GagarinRu/avatars/internal/worker"
-	"go.uber.org/zap"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func shutdownSignals() []os.Signal {
@@ -62,18 +66,23 @@ func main() {
 	}
 	opts = config.ApplyAppEnv(opts)
 
-	if err := logger.Initialize(opts.LogLevel); err != nil {
-		logger.Log.Fatal("Failed to initialize logger", zap.Error(err))
+	ctx := context.Background()
+	otelShutdown, err := telemetry.Init(ctx, serviceName(), opts.LogLevel)
+	if err != nil {
+		slog.Error("failed to initialize telemetry", "error", err)
+		os.Exit(1)
 	}
-	defer func() { _ = logger.Log.Sync() }()
+	defer otelShutdown()
 
 	if opts.DatabaseDSN == "" {
-		logger.Log.Fatal("Database DSN is required", zap.String("hint", "use -d or DATABASE_DSN"))
+		slog.Error("database DSN is required", "hint", "use -d or DATABASE_DSN")
+		os.Exit(1)
 	}
 
 	store, err := storage.NewPostgresStorage(opts.DatabaseDSN)
 	if err != nil {
-		logger.Log.Fatal("Failed to connect to database", zap.Error(err))
+		slog.Error("failed to connect to database", "error", err)
+		os.Exit(1)
 	}
 	defer func() { _ = store.Close() }()
 
@@ -81,18 +90,20 @@ func main() {
 		Endpoint:       opts.S3Endpoint,
 		PublicEndpoint: opts.S3PublicEndpoint,
 		Bucket:         opts.S3Bucket,
-		Region:    opts.S3Region,
-		AccessKey: opts.S3AccessKey,
-		SecretKey: opts.S3SecretKey,
-		UseSSL:    opts.S3UseSSL,
+		Region:         opts.S3Region,
+		AccessKey:      opts.S3AccessKey,
+		SecretKey:      opts.S3SecretKey,
+		UseSSL:         opts.S3UseSSL,
 	})
 	if err != nil {
-		logger.Log.Fatal("Failed to create S3 client", zap.Error(err))
+		slog.Error("failed to create S3 client", "error", err)
+		os.Exit(1)
 	}
 
 	conn, ch, err := queue.Connect(opts.RabbitMQURL)
 	if err != nil {
-		logger.Log.Fatal("Failed to connect to RabbitMQ", zap.Error(err))
+		slog.Error("failed to connect to RabbitMQ", "error", err)
+		os.Exit(1)
 	}
 	defer func() {
 		_ = ch.Close()
@@ -102,12 +113,29 @@ func main() {
 	svc := worker.NewService(store, objects)
 	consumer := queue.NewConsumer(ch, queue.NewIdempotency(store))
 
-	ctx, stop := signal.NotifyContext(context.Background(), shutdownSignals()...)
+	sigCtx, stop := signal.NotifyContext(context.Background(), shutdownSignals()...)
 	defer stop()
+	metrics.StartQueueDepthPoller(sigCtx, opts.RabbitMQURL, queue.QueueProcessing, 15*time.Second)
 
-	logger.Log.Info("Worker started")
-	if err := consumer.Consume(ctx, svc.Handle); err != nil && err != context.Canceled {
-		logger.Log.Fatal("Worker stopped with error", zap.Error(err))
+	metricsServer := &http.Server{Addr: ":9091", Handler: promhttp.Handler()}
+	go func() {
+		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("metrics server failed", "error", err)
+		}
+	}()
+
+	slog.Info("worker started")
+	if err := consumer.Consume(sigCtx, svc.Handle); err != nil && err != context.Canceled {
+		slog.Error("worker stopped with error", "error", err)
+		os.Exit(1)
 	}
-	logger.Log.Info("Worker stopped gracefully")
+	_ = metricsServer.Shutdown(context.Background())
+	slog.Info("worker stopped gracefully")
+}
+
+func serviceName() string {
+	if name := os.Getenv("OTEL_SERVICE_NAME"); name != "" {
+		return name
+	}
+	return "avatars-worker"
 }
