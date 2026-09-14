@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -85,7 +86,14 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "user_id required"})
 		return
 	}
+	const multipartOverhead = 1024
+	r.Body = http.MaxBytesReader(w, r.Body, h.maxUpload+multipartOverhead)
 	if err := r.ParseMultipartForm(h.maxUpload); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "request too large"})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid multipart form"})
 		return
 	}
@@ -142,6 +150,8 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
 		StagingKey: stagingKey,
 	}
 	if err := h.publisher.PublishAvatarProcess(r.Context(), msg); err != nil {
+		_ = h.objects.Delete(r.Context(), stagingKey)
+		_ = h.store.UpdateAvatarStatus(r.Context(), userID, models.StatusFailed, "failed to enqueue processing")
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to enqueue processing"})
 		return
 	}
