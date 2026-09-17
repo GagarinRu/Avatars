@@ -2,8 +2,10 @@ package config
 
 const (
 	defaultAddress       = ":8080"
+	defaultMetricsAddr   = ":9091"
 	defaultLogLevel      = "info"
 	defaultRabbitMQURL   = "amqp://guest:guest@localhost:5672/"
+	defaultRabbitMQPort  = "15672"
 	defaultS3Endpoint    = "http://localhost:9000"
 	defaultS3Bucket      = "avatars"
 	defaultS3AccessKey   = "minioadmin"
@@ -17,7 +19,11 @@ type AppJSON struct {
 	Address        string `json:"address"`
 	DatabaseDSN    string `json:"database_dsn"`
 	LogLevel       string `json:"log_level"`
-	RabbitMQURL    string `json:"rabbitmq_url"`
+	RabbitMQURL        string `json:"rabbitmq_url"`
+	RabbitMQMgmtPort   string `json:"rabbitmq_mgmt_port"`
+	RabbitMQUser       string `json:"rabbitmq_user"`
+	RabbitMQPassword   string `json:"rabbitmq_password"`
+	MetricsAddress     string `json:"metrics_address"`
 	S3Endpoint     string `json:"s3_endpoint"`
 	S3Bucket       string `json:"s3_bucket"`
 	S3AccessKey    string `json:"s3_access_key"`
@@ -33,7 +39,11 @@ type AppOptions struct {
 	Address        string
 	DatabaseDSN    string
 	LogLevel       string
-	RabbitMQURL    string
+	RabbitMQURL        string
+	RabbitMQMgmtPort   string
+	RabbitMQUser       string
+	RabbitMQPassword   string
+	MetricsAddress     string
 	S3Endpoint     string
 	S3Bucket       string
 	S3AccessKey    string
@@ -58,6 +68,10 @@ func ApplyAppJSON(opts AppOptions, file AppJSON) AppOptions {
 		nonEmptyStringOption(file.DatabaseDSN, func(o *AppOptions, v string) { o.DatabaseDSN = v }),
 		nonEmptyStringOption(file.LogLevel, func(o *AppOptions, v string) { o.LogLevel = v }),
 		nonEmptyStringOption(file.RabbitMQURL, func(o *AppOptions, v string) { o.RabbitMQURL = v }),
+		nonEmptyStringOption(file.RabbitMQMgmtPort, func(o *AppOptions, v string) { o.RabbitMQMgmtPort = v }),
+		nonEmptyStringOption(file.RabbitMQUser, func(o *AppOptions, v string) { o.RabbitMQUser = v }),
+		nonEmptyStringOption(file.RabbitMQPassword, func(o *AppOptions, v string) { o.RabbitMQPassword = v }),
+		nonEmptyStringOption(file.MetricsAddress, func(o *AppOptions, v string) { o.MetricsAddress = v }),
 		nonEmptyStringOption(file.S3Endpoint, func(o *AppOptions, v string) { o.S3Endpoint = v }),
 		nonEmptyStringOption(file.S3Bucket, func(o *AppOptions, v string) { o.S3Bucket = v }),
 		nonEmptyStringOption(file.S3AccessKey, func(o *AppOptions, v string) { o.S3AccessKey = v }),
@@ -79,6 +93,10 @@ func ApplyAppEnv(opts AppOptions) AppOptions {
 	opts.DatabaseDSN = envString("DATABASE_DSN", opts.DatabaseDSN)
 	opts.LogLevel = envString("LOG_LEVEL", opts.LogLevel)
 	opts.RabbitMQURL = envString("RABBITMQ_URL", opts.RabbitMQURL)
+	opts.RabbitMQMgmtPort = envString("RABBITMQ_MGMT_PORT", opts.RabbitMQMgmtPort)
+	opts.RabbitMQUser = envString("RABBITMQ_USER", opts.RabbitMQUser)
+	opts.RabbitMQPassword = envString("RABBITMQ_PASSWORD", opts.RabbitMQPassword)
+	opts.MetricsAddress = envString("METRICS_ADDRESS", opts.MetricsAddress)
 	opts.S3Endpoint = envString("S3_ENDPOINT", opts.S3Endpoint)
 	opts.S3Bucket = envString("S3_BUCKET", opts.S3Bucket)
 	opts.S3AccessKey = envString("S3_ACCESS_KEY", opts.S3AccessKey)
@@ -94,7 +112,9 @@ func DefaultAppOptions() AppOptions {
 	opts := AppOptions{
 		Address:        defaultAddress,
 		LogLevel:       defaultLogLevel,
-		RabbitMQURL:    defaultRabbitMQURL,
+		RabbitMQURL:      defaultRabbitMQURL,
+		RabbitMQMgmtPort: defaultRabbitMQPort,
+		MetricsAddress:   defaultMetricsAddr,
 		S3Endpoint:     defaultS3Endpoint,
 		S3Bucket:       defaultS3Bucket,
 		S3AccessKey:    defaultS3AccessKey,

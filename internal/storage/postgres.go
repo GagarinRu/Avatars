@@ -142,6 +142,17 @@ func (ps *PostgresStorage) IsMessageProcessed(ctx context.Context, messageID str
 	return exists, err
 }
 
+func (ps *PostgresStorage) TotalStorageBytes(ctx context.Context) (int64, error) {
+	ctx, span := otel.Tracer("avatars-db").Start(ctx, "total_storage_bytes")
+	defer span.End()
+	ps.RecordDBStats()
+	var total int64
+	err := ps.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(size_bytes), 0) FROM avatars WHERE status = $1
+	`, models.StatusReady).Scan(&total)
+	return total, err
+}
+
 func (ps *PostgresStorage) MarkMessageProcessed(ctx context.Context, messageID string) error {
 	ctx, span := otel.Tracer("avatars-db").Start(ctx, "mark_message_processed")
 	defer span.End()

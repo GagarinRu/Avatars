@@ -30,6 +30,10 @@ func shutdownSignals() []os.Signal {
 }
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	printBuildInfo()
 
 	opts := config.DefaultAppOptions()
@@ -70,19 +74,19 @@ func main() {
 	otelShutdown, err := telemetry.Init(ctx, serviceName(), opts.LogLevel)
 	if err != nil {
 		slog.Error("failed to initialize telemetry", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	defer otelShutdown()
 
 	if opts.DatabaseDSN == "" {
 		slog.Error("database DSN is required", "hint", "use -d or DATABASE_DSN")
-		os.Exit(1)
+		return 1
 	}
 
 	store, err := storage.NewPostgresStorage(opts.DatabaseDSN)
 	if err != nil {
 		slog.Error("failed to connect to database", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	defer func() { _ = store.Close() }()
 
@@ -97,13 +101,13 @@ func main() {
 	})
 	if err != nil {
 		slog.Error("failed to create S3 client", "error", err)
-		os.Exit(1)
+		return 1
 	}
 
 	conn, ch, err := queue.Connect(opts.RabbitMQURL)
 	if err != nil {
 		slog.Error("failed to connect to RabbitMQ", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	defer func() {
 		_ = ch.Close()
@@ -115,22 +119,35 @@ func main() {
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), shutdownSignals()...)
 	defer stop()
-	metrics.StartQueueDepthPoller(sigCtx, opts.RabbitMQURL, queue.QueueProcessing, 15*time.Second)
 
-	metricsServer := &http.Server{Addr: ":9091", Handler: promhttp.Handler()}
+	mgmt, err := metrics.RabbitMQManagementFromURL(
+		opts.RabbitMQURL,
+		opts.RabbitMQMgmtPort,
+		opts.RabbitMQUser,
+		opts.RabbitMQPassword,
+	)
+	if err != nil {
+		slog.Error("failed to parse rabbitmq management config", "error", err)
+		return 1
+	}
+	metrics.StartQueueDepthPoller(sigCtx, mgmt, queue.QueueProcessing, 15*time.Second)
+	metrics.StartStorageUsagePoller(sigCtx, store, 30*time.Second)
+
+	metricsServer := &http.Server{Addr: opts.MetricsAddress, Handler: promhttp.Handler()}
 	go func() {
 		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("metrics server failed", "error", err)
 		}
 	}()
 
-	slog.Info("worker started")
+	slog.Info("worker started", "metrics_address", opts.MetricsAddress)
 	if err := consumer.Consume(sigCtx, svc.Handle); err != nil && err != context.Canceled {
 		slog.Error("worker stopped with error", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	_ = metricsServer.Shutdown(context.Background())
 	slog.Info("worker stopped gracefully")
+	return 0
 }
 
 func serviceName() string {

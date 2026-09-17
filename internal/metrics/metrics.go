@@ -1,6 +1,8 @@
 package metrics
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -45,12 +47,11 @@ var (
 		[]string{"status"},
 	)
 
-	StorageUsage = promauto.NewGaugeVec(
+	StorageUsage = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "avatars_storage_bytes",
-			Help: "Total storage used by avatars",
+			Help: "Total storage used by ready avatars",
 		},
-		[]string{"user_id"},
 	)
 
 	DBConnectionsOpen = promauto.NewGauge(
@@ -60,6 +61,34 @@ var (
 		},
 	)
 )
+
+// StorageUsageProvider reports aggregate avatar storage usage.
+type StorageUsageProvider interface {
+	TotalStorageBytes(ctx context.Context) (int64, error)
+}
+
+func StartStorageUsagePoller(ctx context.Context, store StorageUsageProvider, interval time.Duration) {
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				total, err := store.TotalStorageBytes(ctx)
+				if err != nil {
+					slog.Debug("storage usage poll failed", "error", err)
+					continue
+				}
+				StorageUsage.Set(float64(total))
+			}
+		}
+	}()
+}
 
 func HTTPMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

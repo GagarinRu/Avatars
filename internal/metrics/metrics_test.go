@@ -66,7 +66,7 @@ func TestUploadMetricsRegistration(t *testing.T) {
 	t.Parallel()
 	metrics.UploadsTotal.WithLabelValues("success").Inc()
 	metrics.UploadDuration.WithLabelValues("success").Observe(0.1)
-	metrics.StorageUsage.WithLabelValues("user-1").Set(1024)
+	metrics.StorageUsage.Set(1024)
 
 	mfs, err := prometheus.DefaultGatherer.Gather()
 	if err != nil {

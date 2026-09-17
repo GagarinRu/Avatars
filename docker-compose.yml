@@ -130,6 +130,10 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_EXPORTER_OTLP_INSECURE: "true"
       OTEL_RESOURCE_ATTRIBUTES: deployment.environment=development
+      METRICS_ADDRESS: :9091
+      RABBITMQ_MGMT_PORT: ${RABBITMQ_MGMT_PORT:-15672}
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
     ports:
       - "9091:9091"
     depends_on:
