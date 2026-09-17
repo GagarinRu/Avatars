@@ -7,10 +7,14 @@ import (
 	"io"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/GagarinRu/avatars/internal/metrics"
 	"github.com/GagarinRu/avatars/internal/models"
 	"github.com/GagarinRu/avatars/internal/processor"
 	"github.com/GagarinRu/avatars/internal/queue"
 	"github.com/GagarinRu/avatars/internal/storage"
+	"github.com/GagarinRu/avatars/internal/telemetry"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type ObjectStore interface {
@@ -29,6 +33,12 @@ func NewService(store storage.Storage, objects ObjectStore) *Service {
 }
 
 func (s *Service) Handle(ctx context.Context, msg queue.AvatarProcessMessage, _ amqp.Delivery) error {
+	ctx, span := otel.Tracer("avatars-worker").Start(ctx, "process_avatar")
+	defer span.End()
+	span.SetAttributes(attribute.String("user_id", msg.UserID), attribute.String("message_id", msg.MessageID))
+	log := telemetry.LoggerFromContext(ctx)
+	log.InfoContext(ctx, "processing avatar", "user_id", msg.UserID, "message_id", msg.MessageID)
+
 	if err := s.store.UpdateAvatarStatus(ctx, msg.UserID, models.StatusProcessing, ""); err != nil {
 		return fmt.Errorf("update status: %w", err)
 	}
@@ -60,6 +70,14 @@ func (s *Service) Handle(ctx context.Context, msg queue.AvatarProcessMessage, _ 
 	if err := s.store.MarkAvatarReady(ctx, msg.UserID, originalKey, thumbKey, processed.ContentType, processed.SizeBytes, processed.Width, processed.Height); err != nil {
 		return err
 	}
+
+	metrics.StorageUsage.WithLabelValues(msg.UserID).Set(float64(processed.SizeBytes))
+	log.InfoContext(ctx, "avatar processed",
+		"user_id", msg.UserID,
+		"size_bytes", processed.SizeBytes,
+		"width", processed.Width,
+		"height", processed.Height,
+	)
 
 	_ = s.objects.Delete(ctx, msg.StagingKey)
 	return nil

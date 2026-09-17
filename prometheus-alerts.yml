@@ -1,0 +1,37 @@
+groups:
+  - name: avatar-service
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          (
+            rate(avatars_uploads_total{status="error"}[5m])
+            /
+            rate(avatars_uploads_total[5m])
+          ) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+          service: avatars-api
+        annotations:
+          summary: High avatar upload error rate
+          description: More than 10% of uploads failed in the last 5 minutes.
+
+      - alert: HighResponseTime
+        expr: histogram_quantile(0.95, rate(avatars_upload_duration_seconds_bucket[5m])) > 5
+        for: 2m
+        labels:
+          severity: critical
+          service: avatars-api
+        annotations:
+          summary: High avatar upload response time
+          description: P95 upload duration exceeded 5 seconds.
+
+      - alert: QueueBacklog
+        expr: avatars_queue_depth > 10
+        for: 1m
+        labels:
+          severity: warning
+          service: avatars-worker
+        annotations:
+          summary: Avatar processing queue backlog
+          description: Processing queue depth is above 10 messages.

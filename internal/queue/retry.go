@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 func resolveRetryTarget(retryCount int) (queueName, exchange, routingKey string) {
@@ -62,15 +64,24 @@ func NewPublisher(ch publishChannel) *Publisher {
 	return &Publisher{ch: ch}
 }
 
-func (p *Publisher) PublishAvatarProcess(_ context.Context, msg AvatarProcessMessage) error {
+func (p *Publisher) PublishAvatarProcess(ctx context.Context, msg AvatarProcessMessage) error {
+	ctx, span := otel.Tracer("avatars-queue").Start(ctx, "publish_avatar_process")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("user_id", msg.UserID),
+		attribute.String("message_id", msg.MessageID),
+	)
+
 	body, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("marshal message: %w", err)
 	}
+	headers := InjectTraceContext(ctx, amqp.Table{})
 	return p.ch.Publish(ExchangeDirect, RoutingUpload, false, false, amqp.Publishing{
 		ContentType:  "application/json",
 		Body:         body,
 		MessageId:    msg.MessageID,
 		DeliveryMode: amqp.Persistent,
+		Headers:      headers,
 	})
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,11 +13,13 @@ import (
 
 	"github.com/GagarinRu/avatars/internal/config"
 	"github.com/GagarinRu/avatars/internal/handler"
-	"github.com/GagarinRu/avatars/internal/logger"
+	"github.com/GagarinRu/avatars/internal/metrics"
 	"github.com/GagarinRu/avatars/internal/objectstore"
 	"github.com/GagarinRu/avatars/internal/queue"
 	"github.com/GagarinRu/avatars/internal/storage"
-	"go.uber.org/zap"
+	"github.com/GagarinRu/avatars/internal/telemetry"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 func shutdownSignals() []os.Signal {
@@ -69,18 +72,23 @@ func main() {
 	}
 	opts = config.ApplyAppEnv(opts)
 
-	if err := logger.Initialize(opts.LogLevel); err != nil {
-		logger.Log.Fatal("Failed to initialize logger", zap.Error(err))
+	ctx := context.Background()
+	otelShutdown, err := telemetry.Init(ctx, serviceName(), opts.LogLevel)
+	if err != nil {
+		slog.Error("failed to initialize telemetry", "error", err)
+		os.Exit(1)
 	}
-	defer func() { _ = logger.Log.Sync() }()
+	defer otelShutdown()
 
 	if opts.DatabaseDSN == "" {
-		logger.Log.Fatal("Database DSN is required", zap.String("hint", "use -d or DATABASE_DSN"))
+		slog.Error("database DSN is required", "hint", "use -d or DATABASE_DSN")
+		os.Exit(1)
 	}
 
 	store, err := storage.NewPostgresStorage(opts.DatabaseDSN)
 	if err != nil {
-		logger.Log.Fatal("Failed to connect to database", zap.Error(err))
+		slog.Error("failed to connect to database", "error", err)
+		os.Exit(1)
 	}
 	defer func() { _ = store.Close() }()
 
@@ -88,21 +96,24 @@ func main() {
 		Endpoint:       opts.S3Endpoint,
 		PublicEndpoint: opts.S3PublicEndpoint,
 		Bucket:         opts.S3Bucket,
-		Region:    opts.S3Region,
-		AccessKey: opts.S3AccessKey,
-		SecretKey: opts.S3SecretKey,
-		UseSSL:    opts.S3UseSSL,
+		Region:         opts.S3Region,
+		AccessKey:      opts.S3AccessKey,
+		SecretKey:      opts.S3SecretKey,
+		UseSSL:         opts.S3UseSSL,
 	})
 	if err != nil {
-		logger.Log.Fatal("Failed to create S3 client", zap.Error(err))
+		slog.Error("failed to create S3 client", "error", err)
+		os.Exit(1)
 	}
 	if err := objects.EnsureBucket(context.Background()); err != nil {
-		logger.Log.Fatal("Failed to ensure S3 bucket", zap.Error(err))
+		slog.Error("failed to ensure S3 bucket", "error", err)
+		os.Exit(1)
 	}
 
 	conn, ch, err := queue.Connect(opts.RabbitMQURL)
 	if err != nil {
-		logger.Log.Fatal("Failed to connect to RabbitMQ", zap.Error(err))
+		slog.Error("failed to connect to RabbitMQ", "error", err)
+		os.Exit(1)
 	}
 	defer func() {
 		_ = ch.Close()
@@ -112,24 +123,38 @@ func main() {
 	publisher := queue.NewPublisher(ch)
 	h := handler.NewHandler(store, objects, publisher, opts.MaxUploadBytes)
 	mux := handler.NewMux(h)
+	mux.Handle("GET /metrics", promhttp.Handler())
 
-	server := &http.Server{Addr: opts.Address, Handler: logger.RequestLogger(mux)}
+	var root http.Handler = mux
+	root = metrics.HTTPMiddleware(root)
+	root = otelhttp.NewHandler(root, "avatars-api")
+
+	server := &http.Server{Addr: opts.Address, Handler: root}
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Log.Fatal("Server failed", zap.Error(err))
+			slog.Error("server failed", "error", err)
+			os.Exit(1)
 		}
 	}()
-	logger.Log.Info("API server started", zap.String("address", opts.Address))
+	slog.Info("API server started", "address", opts.Address)
 
-	ctx, stop := signal.NotifyContext(context.Background(), shutdownSignals()...)
+	sigCtx, stop := signal.NotifyContext(context.Background(), shutdownSignals()...)
 	defer stop()
-	<-ctx.Done()
-	logger.Log.Info("Received shutdown signal")
+	<-sigCtx.Done()
+	slog.Info("received shutdown signal")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		logger.Log.Fatal("Server shutdown failed", zap.Error(err))
+		slog.Error("server shutdown failed", "error", err)
+		os.Exit(1)
 	}
-	logger.Log.Info("API server stopped gracefully")
+	slog.Info("API server stopped gracefully")
+}
+
+func serviceName() string {
+	if name := os.Getenv("OTEL_SERVICE_NAME"); name != "" {
+		return name
+	}
+	return "avatars-api"
 }

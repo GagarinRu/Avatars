@@ -2,67 +2,50 @@
 package logger
 
 import (
-	"net/http"
-	"time"
-
-	"go.uber.org/zap"
+	"context"
+	"log/slog"
+	"os"
+	"strings"
 )
 
-var Log *zap.Logger = zap.NewNop()
-
+// Initialize configures JSON logging to stderr. Used in tests and local runs without OTLP.
 func Initialize(level string) error {
-	lvl, err := zap.ParseAtomicLevel(level)
+	lvl, err := parseLevel(level)
 	if err != nil {
 		return err
 	}
-	cfg := zap.NewProductionConfig()
-	cfg.Level = lvl
-	zl, err := cfg.Build()
-	if err != nil {
-		return err
-	}
-	Log = zl
+	handler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: lvl})
+	slog.SetDefault(slog.New(handler))
 	return nil
 }
 
-func RequestLogger(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		startTime := time.Now()
-		Log.Info("Got incoming HTTP request",
-			zap.String("method", r.Method),
-			zap.String("uri", r.RequestURI),
-		)
-
-		rw := &responseWriter{
-			ResponseWriter: w,
-			statusCode:     http.StatusOK,
-		}
-		h.ServeHTTP(rw, r)
-
-		duration := time.Since(startTime)
-		Log.Info("Completed HTTP request",
-			zap.String("method", r.Method),
-			zap.String("uri", r.RequestURI),
-			zap.Int("status", rw.statusCode),
-			zap.Int("size", rw.size),
-			zap.Duration("duration", duration),
-		)
-	})
+func parseLevel(level string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info", "":
+		return slog.LevelInfo, nil
+	case "warn", "warning":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return slog.LevelInfo, errInvalidLevel
+	}
 }
 
-type responseWriter struct {
-	http.ResponseWriter
-	statusCode int
-	size       int
+var errInvalidLevel = &levelError{}
+
+type levelError struct{}
+
+func (e *levelError) Error() string { return "invalid log level" }
+
+// InfoContext logs an info message with request context.
+func InfoContext(ctx context.Context, msg string, args ...any) {
+	slog.InfoContext(ctx, msg, args...)
 }
 
-func (rw *responseWriter) WriteHeader(code int) {
-	rw.statusCode = code
-	rw.ResponseWriter.WriteHeader(code)
-}
-
-func (rw *responseWriter) Write(b []byte) (int, error) {
-	size, err := rw.ResponseWriter.Write(b)
-	rw.size += size
-	return size, err
+// ErrorContext logs an error message with request context.
+func ErrorContext(ctx context.Context, msg string, args ...any) {
+	slog.ErrorContext(ctx, msg, args...)
 }

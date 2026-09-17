@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: Avatars
+    orgId: 1
+    folder: Avatars
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards/json
