@@ -18,6 +18,8 @@ type Storage interface {
 	IsMessageProcessed(ctx context.Context, messageID string) (bool, error)
 	MarkMessageProcessed(ctx context.Context, messageID string) error
 
+	TotalStorageBytes(ctx context.Context) (int64, error)
+
 	Ping(ctx context.Context) error
 	Close() error
 }

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 var QueueDepth = promauto.NewGauge(
@@ -22,7 +22,50 @@ var QueueDepth = promauto.NewGauge(
 	},
 )
 
-func StartQueueDepthPoller(ctx context.Context, rabbitURL, queueName string, interval time.Duration) {
+var managementClient = &http.Client{Timeout: 10 * time.Second}
+
+// RabbitMQManagement holds connection details for the RabbitMQ management API.
+type RabbitMQManagement struct {
+	Host     string
+	Port     string
+	User     string
+	Password string
+}
+
+func RabbitMQManagementFromURL(rabbitURL, mgmtPort, user, password string) (RabbitMQManagement, error) {
+	parsed, err := url.Parse(rabbitURL)
+	if err != nil {
+		return RabbitMQManagement{}, err
+	}
+	if parsed.Scheme != "amqp" && parsed.Scheme != "amqps" {
+		return RabbitMQManagement{}, fmt.Errorf("unsupported rabbitmq scheme: %s", parsed.Scheme)
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return RabbitMQManagement{}, fmt.Errorf("rabbitmq host is empty")
+	}
+	if mgmtPort == "" {
+		mgmtPort = "15672"
+	}
+	if user == "" {
+		user = parsed.User.Username()
+	}
+	if password == "" {
+		password, _ = parsed.User.Password()
+	}
+	if user == "" {
+		user = "guest"
+		password = "guest"
+	}
+	return RabbitMQManagement{
+		Host:     host,
+		Port:     mgmtPort,
+		User:     user,
+		Password: password,
+	}, nil
+}
+
+func StartQueueDepthPoller(ctx context.Context, mgmt RabbitMQManagement, queueName string, interval time.Duration) {
 	if interval <= 0 {
 		interval = 15 * time.Second
 	}
@@ -34,7 +77,7 @@ func StartQueueDepthPoller(ctx context.Context, rabbitURL, queueName string, int
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				depth, err := fetchQueueDepth(rabbitURL, queueName)
+				depth, err := fetchQueueDepth(mgmt, queueName)
 				if err != nil {
 					slog.Debug("queue depth poll failed", "error", err)
 					continue
@@ -45,17 +88,18 @@ func StartQueueDepthPoller(ctx context.Context, rabbitURL, queueName string, int
 	}()
 }
 
-func fetchQueueDepth(rabbitURL, queueName string) (int, error) {
-	managementURL, err := rabbitManagementURL(rabbitURL)
+func fetchQueueDepth(mgmt RabbitMQManagement, queueName string) (int, error) {
+	baseURL, err := rabbitManagementBaseURL(mgmt)
 	if err != nil {
 		return 0, err
 	}
-	endpoint := fmt.Sprintf("%s/api/queues/%s/%s", managementURL, url.PathEscape("/"), url.PathEscape(queueName))
+	endpoint := fmt.Sprintf("%s/api/queues/%s/%s", baseURL, url.PathEscape("/"), url.PathEscape(queueName))
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return 0, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	req.SetBasicAuth(mgmt.User, mgmt.Password)
+	resp, err := managementClient.Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -73,31 +117,13 @@ func fetchQueueDepth(rabbitURL, queueName string) (int, error) {
 	return payload.Messages, nil
 }
 
-func RabbitManagementURLForTest(rabbitURL string) (string, error) {
-	return rabbitManagementURL(rabbitURL)
-}
-
-func rabbitManagementURL(rabbitURL string) (string, error) {
-	parsed, err := url.Parse(rabbitURL)
-	if err != nil {
-		return "", err
-	}
-	if parsed.Scheme != "amqp" && parsed.Scheme != "amqps" {
-		return "", fmt.Errorf("unsupported rabbitmq scheme: %s", parsed.Scheme)
-	}
-	host := parsed.Hostname()
-	if host == "" {
+func rabbitManagementBaseURL(mgmt RabbitMQManagement) (string, error) {
+	if mgmt.Host == "" {
 		return "", fmt.Errorf("rabbitmq host is empty")
 	}
-	port := "15672"
-	if override := strings.TrimSpace(parsed.Query().Get("management_port")); override != "" {
-		port = override
+	port := mgmt.Port
+	if port == "" {
+		port = "15672"
 	}
-	user := parsed.User.Username()
-	password, _ := parsed.User.Password()
-	if user == "" {
-		user = "guest"
-		password = "guest"
-	}
-	return fmt.Sprintf("http://%s:%s@%s:%s", user, password, host, port), nil
+	return fmt.Sprintf("http://%s:%s", mgmt.Host, port), nil
 }

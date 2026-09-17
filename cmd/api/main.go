@@ -31,6 +31,10 @@ func shutdownSignals() []os.Signal {
 }
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	printBuildInfo()
 
 	opts := config.DefaultAppOptions()
@@ -76,19 +80,19 @@ func main() {
 	otelShutdown, err := telemetry.Init(ctx, serviceName(), opts.LogLevel)
 	if err != nil {
 		slog.Error("failed to initialize telemetry", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	defer otelShutdown()
 
 	if opts.DatabaseDSN == "" {
 		slog.Error("database DSN is required", "hint", "use -d or DATABASE_DSN")
-		os.Exit(1)
+		return 1
 	}
 
 	store, err := storage.NewPostgresStorage(opts.DatabaseDSN)
 	if err != nil {
 		slog.Error("failed to connect to database", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	defer func() { _ = store.Close() }()
 
@@ -103,17 +107,17 @@ func main() {
 	})
 	if err != nil {
 		slog.Error("failed to create S3 client", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	if err := objects.EnsureBucket(context.Background()); err != nil {
 		slog.Error("failed to ensure S3 bucket", "error", err)
-		os.Exit(1)
+		return 1
 	}
 
 	conn, ch, err := queue.Connect(opts.RabbitMQURL)
 	if err != nil {
 		slog.Error("failed to connect to RabbitMQ", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	defer func() {
 		_ = ch.Close()
@@ -123,33 +127,45 @@ func main() {
 	publisher := queue.NewPublisher(ch)
 	h := handler.NewHandler(store, objects, publisher, opts.MaxUploadBytes)
 	mux := handler.NewMux(h)
-	mux.Handle("GET /metrics", promhttp.Handler())
 
-	var root http.Handler = mux
-	root = metrics.HTTPMiddleware(root)
-	root = otelhttp.NewHandler(root, "avatars-api")
+	apiHandler := metrics.HTTPMiddleware(otelhttp.NewHandler(mux, "avatars-api"))
+	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/metrics" {
+			promhttp.Handler().ServeHTTP(w, r)
+			return
+		}
+		apiHandler.ServeHTTP(w, r)
+	})
+
+	sigCtx, stop := signal.NotifyContext(context.Background(), shutdownSignals()...)
+	defer stop()
+	metrics.StartStorageUsagePoller(sigCtx, store, 30*time.Second)
 
 	server := &http.Server{Addr: opts.Address, Handler: root}
+	serverErr := make(chan error, 1)
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("server failed", "error", err)
-			os.Exit(1)
+			serverErr <- err
 		}
 	}()
 	slog.Info("API server started", "address", opts.Address)
 
-	sigCtx, stop := signal.NotifyContext(context.Background(), shutdownSignals()...)
-	defer stop()
-	<-sigCtx.Done()
-	slog.Info("received shutdown signal")
+	select {
+	case err := <-serverErr:
+		slog.Error("server failed", "error", err)
+		return 1
+	case <-sigCtx.Done():
+		slog.Info("received shutdown signal")
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		slog.Error("server shutdown failed", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	slog.Info("API server stopped gracefully")
+	return 0
 }
 
 func serviceName() string {

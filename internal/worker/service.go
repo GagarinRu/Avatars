@@ -7,7 +7,6 @@ import (
 	"io"
 
 	amqp "github.com/rabbitmq/amqp091-go"
-	"github.com/GagarinRu/avatars/internal/metrics"
 	"github.com/GagarinRu/avatars/internal/models"
 	"github.com/GagarinRu/avatars/internal/processor"
 	"github.com/GagarinRu/avatars/internal/queue"
@@ -71,7 +70,6 @@ func (s *Service) Handle(ctx context.Context, msg queue.AvatarProcessMessage, _ 
 		return err
 	}
 
-	metrics.StorageUsage.WithLabelValues(msg.UserID).Set(float64(processed.SizeBytes))
 	log.InfoContext(ctx, "avatar processed",
 		"user_id", msg.UserID,
 		"size_bytes", processed.SizeBytes,
