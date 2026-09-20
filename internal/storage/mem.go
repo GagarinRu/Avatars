@@ -92,6 +92,18 @@ func (m *MemStorage) MarkAvatarReady(_ context.Context, userID, originalKey, thu
 	return nil
 }
 
+func (m *MemStorage) TotalStorageBytes(_ context.Context) (int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var total int64
+	for _, avatar := range m.avatars {
+		if avatar.Status == models.StatusReady {
+			total += avatar.SizeBytes
+		}
+	}
+	return total, nil
+}
+
 func (m *MemStorage) IsMessageProcessed(_ context.Context, messageID string) (bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

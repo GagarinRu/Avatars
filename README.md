@@ -129,6 +129,32 @@ curl http://localhost:8080/api/avatars/user-1
 curl -X DELETE http://localhost:8080/api/avatars/user-1
 ```
 
+## Observability
+
+Полный стек наблюдаемости поднимается вместе с приложением через `docker compose up -d --build`:
+
+| Сервис | URL | Логин |
+|--------|-----|-------|
+| Grafana | http://localhost:3000 | admin / admin |
+| Prometheus | http://localhost:9090 | — |
+| Alertmanager | http://localhost:9093 | — |
+| Jaeger | http://localhost:16686 | — |
+| Loki | http://localhost:3100 | — |
+
+В репозитории лежат:
+- `grafana/dashboards/avatars-overview.json` — дашборд **Avatars Service Overview** (Grafana подхватит его при старте);
+- `prometheus-alerts.yml` — когда слать тревогу: много ошибок загрузки, долгий ответ, очередь переполнена;
+- `prometheus.yml`, `alertmanager.yml`, `otel-collector-config.yml`, `loki-config.yml` — настройки Prometheus, Alertmanager, collector и Loki.
+
+Метрики API: `GET /metrics` (без трейсинга и HTTP-middleware). Worker: `GET :9091/metrics` (порт задаётся `METRICS_ADDRESS`).
+
+Проверка метрик:
+
+```bash
+curl http://localhost:8080/metrics
+curl http://localhost:9091/metrics
+```
+
 ## Локальный запуск без Docker (API + worker)
 
 ```bash
@@ -175,8 +201,10 @@ internal/
   worker/          — бизнес-логика worker
   web/             — веб-интерфейс
 migrations/        — SQL-миграции
+grafana/dashboards/ — Grafana-дашборды
 scripts/minio-init/ — init-образ: создание S3 bucket при старте compose
 docker-compose.yml   — сервис migrate: применение SQL-миграций перед api/worker
+prometheus-alerts.yml — alert rules для Prometheus
 ```
 
 

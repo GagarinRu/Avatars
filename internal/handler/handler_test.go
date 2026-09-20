@@ -59,6 +59,12 @@ func (m *mockStore) MarkAvatarReady(_ context.Context, userID, originalKey, thum
 	m.avatar.Height = height
 	return nil
 }
+func (m *mockStore) TotalStorageBytes(_ context.Context) (int64, error) {
+	if m.avatar != nil && m.avatar.Status == models.StatusReady {
+		return m.avatar.SizeBytes, nil
+	}
+	return 0, nil
+}
 func (m *mockStore) IsMessageProcessed(context.Context, string) (bool, error) { return false, nil }
 func (m *mockStore) MarkMessageProcessed(context.Context, string) error       { return nil }
 func (m *mockStore) Ping(context.Context) error                               { return nil }
