@@ -1,0 +1,117 @@
+openapi: 3.0.3
+info:
+  title: Avatars API
+  description: HTTP API for uploading, fetching and deleting user avatars.
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+    description: Local development
+  - url: http://avatars.example.com
+    description: Kubernetes Ingress
+paths:
+  /health:
+    get:
+      summary: Liveness probe
+      operationId: getHealth
+      responses:
+        "200":
+          description: Service is alive
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+  /ping:
+    get:
+      summary: Database connectivity check
+      operationId: pingDatabase
+      responses:
+        "200":
+          description: Database is reachable
+        "503":
+          description: Database is unavailable
+  /api/avatars/{user_id}:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Upload avatar
+      operationId: uploadAvatar
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "202":
+          description: Upload accepted for async processing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadResponse"
+        "400":
+          description: Invalid request
+        "413":
+          description: File too large
+        "429":
+          description: Rate limit exceeded
+        "500":
+          description: Internal error
+    get:
+      summary: Get avatar metadata
+      operationId: getAvatar
+      responses:
+        "200":
+          description: Avatar metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AvatarResponse"
+        "404":
+          description: Avatar not found
+    delete:
+      summary: Delete avatar
+      operationId: deleteAvatar
+      responses:
+        "204":
+          description: Avatar deleted
+        "404":
+          description: Avatar not found
+components:
+  schemas:
+    UploadResponse:
+      type: object
+      properties:
+        user_id:
+          type: string
+        status:
+          type: string
+          example: pending
+        message_id:
+          type: string
+    AvatarResponse:
+      type: object
+      properties:
+        user_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, ready, failed]
+        content_type:
+          type: string
+        original_url:
+          type: string
+          format: uri
+        thumbnail_url:
+          type: string
+          format: uri

@@ -1,0 +1,20 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "avatars.fullname" . }}-migrate
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: "{{ .Values.image.migrate.repository }}:{{ .Values.image.migrate.tag }}"
+          imagePullPolicy: {{ .Values.image.migrate.pullPolicy }}
+          args:
+            - -path=/migrations
+            - -database={{ include "avatars.databaseDSN" . }}
+            - up

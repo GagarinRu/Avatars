@@ -145,7 +145,16 @@ func run() int {
 		slog.Error("worker stopped with error", "error", err)
 		return 1
 	}
-	_ = metricsServer.Shutdown(context.Background())
+	if sigCtx.Err() != nil {
+		slog.Info("received shutdown signal")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+		slog.Error("metrics server shutdown failed", "error", err)
+		return 1
+	}
 	slog.Info("worker stopped gracefully")
 	return 0
 }

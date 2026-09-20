@@ -1,0 +1,60 @@
+image:
+  api:
+    repository: avatars-api
+    tag: latest
+    pullPolicy: IfNotPresent
+  worker:
+    repository: avatars-worker
+    tag: latest
+    pullPolicy: IfNotPresent
+  migrate:
+    repository: avatars-migrate
+    tag: latest
+    pullPolicy: IfNotPresent
+
+external:
+  host: host.docker.internal
+  postgresPort: 5432
+  rabbitmqPort: 5672
+  minioPort: 9000
+
+database:
+  name: avatars
+  user: avatars
+  password: avatars
+
+rabbitmq:
+  user: guest
+  password: guest
+  managementPort: 15672
+
+s3:
+  bucket: avatars
+  region: us-east-1
+  accessKey: minioadmin
+  secretKey: minioadmin
+  publicEndpoint: http://localhost:9000
+
+api:
+  replicas: 3
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+worker:
+  replicas: 1
+  metricsPort: 9091
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+ingress:
+  host: avatars.example.com
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+
+hpa:
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPU: 70
+  targetMemory: 80

@@ -1,4 +1,4 @@
-.PHONY: test lint build cover
+.PHONY: test lint build cover docker-k8s helm-template
 
 VERSION ?= 0.1.0
 DATE ?= $(shell powershell -NoProfile -Command "Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ'")
@@ -18,3 +18,11 @@ cover:
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/avatars-api ./cmd/api
 	go build -ldflags "$(LDFLAGS)" -o bin/avatars-worker ./cmd/worker
+
+docker-k8s:
+	docker build --target api -t avatars-api:latest .
+	docker build --target worker -t avatars-worker:latest .
+	docker build --target avatars-migrate -t avatars-migrate:latest .
+
+helm-template:
+	helm template avatars ./deploy/helm/avatars --namespace avatars

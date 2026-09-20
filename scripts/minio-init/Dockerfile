@@ -1,4 +1,4 @@
-FROM minio/mc:latest AS mcimg
+FROM quay.io/minio/mc:latest AS mcimg
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates

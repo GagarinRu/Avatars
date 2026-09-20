@@ -16,6 +16,7 @@ import (
 	"github.com/GagarinRu/avatars/internal/metrics"
 	"github.com/GagarinRu/avatars/internal/models"
 	"github.com/GagarinRu/avatars/internal/queue"
+	"github.com/GagarinRu/avatars/internal/resilience"
 	"github.com/GagarinRu/avatars/internal/storage"
 	"github.com/GagarinRu/avatars/internal/telemetry"
 	"github.com/google/uuid"
@@ -39,6 +40,7 @@ type Handler struct {
 	publisher  Publisher
 	maxUpload  int64
 	urlExpiry  time.Duration
+	dbBreaker  *resilience.Breaker
 }
 
 func NewHandler(store storage.Storage, objects ObjectStore, publisher Publisher, maxUpload int64) *Handler {
@@ -51,6 +53,7 @@ func NewHandler(store storage.Storage, objects ObjectStore, publisher Publisher,
 		publisher: publisher,
 		maxUpload: maxUpload,
 		urlExpiry: 15 * time.Minute,
+		dbBreaker: resilience.NewBreaker(5, 30*time.Second),
 	}
 }
 
@@ -254,7 +257,14 @@ func (h *Handler) DeleteAvatar(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Ping(w http.ResponseWriter, r *http.Request) {
-	if err := h.store.Ping(r.Context()); err != nil {
+	err := h.dbBreaker.Call(func() error {
+		return h.store.Ping(r.Context())
+	})
+	if err != nil {
+		if errors.Is(err, resilience.ErrOpen) {
+			writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database circuit open"})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
 		return
 	}

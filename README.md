@@ -46,10 +46,51 @@ Avatars — HTTP API для загрузки, просмотра и удален
 4. Статус в БД меняется на `ready`; клиент получает presigned URL через `GET`.
 5. При ошибке worker отправляет сообщение в retry-очередь (30s, 2m), затем в DLQ.
 
+## Архитектура
+
+```mermaid
+flowchart LR
+    Client([Client])
+    Ingress[Ingress]
+    API[avatars-api]
+    Worker[avatars-worker]
+    PG[(PostgreSQL)]
+    RMQ[(RabbitMQ)]
+    S3[(MinIO)]
+
+    Client --> Ingress --> API
+    API --> PG
+    API --> S3
+    API --> RMQ
+    RMQ --> Worker
+    Worker --> PG
+    Worker --> S3
+```
+
+**Развёртывание:**
+- **Docker Compose** на хосте: PostgreSQL, RabbitMQ, MinIO
+- **Kubernetes (Helm):** API, worker, Ingress, HPA, ServiceMonitor, NetworkPolicy, RBAC
+
+Поды в K8s подключаются к инфраструктуре через `host.docker.internal` (Rancher Desktop).
+
+| Ресурс | Назначение |
+|--------|------------|
+| Deployment | API и worker |
+| Service | ClusterIP для API и worker |
+| Ingress | Внешний доступ, `proxy-body-size: 10m` |
+| ConfigMap / Secret | Конфигурация и секреты |
+| HPA | Автомасштабирование API по CPU/RAM |
+| ServiceMonitor | Метрики для Prometheus |
+| NetworkPolicy | Ограничение трафика |
+| Job (hook) | Миграции БД |
+
+**Безопасность и устойчивость:** секреты в Kubernetes Secret; non-root контейнеры (UID 1000); rate limiting на upload; circuit breaker для PostgreSQL (`/ping`); retry/DLX для RabbitMQ.
+
 ## Требования
 
 - Go 1.25+
 - Docker и Docker Compose
+- Для Kubernetes: Rancher Desktop (или другой K8s), Helm 3, NGINX Ingress, metrics-server, Prometheus Operator
 
 ## Инструкция по запуску
 
@@ -155,6 +196,66 @@ curl http://localhost:8080/metrics
 curl http://localhost:9091/metrics
 ```
 
+## Деплой в Kubernetes (Helm)
+
+Инфраструктура (PostgreSQL, RabbitMQ, MinIO) — через **docker compose** на хосте.
+В Kubernetes деплоятся только API и worker.
+
+### 1. Инфраструктура на хосте
+
+```bash
+docker compose up -d avatars_db rabbitmq minio minio_init migrate
+```
+
+### 2. Сборка образов
+
+```bash
+make docker-k8s
+```
+
+### 3. Установка чарта
+
+```bash
+helm upgrade --install avatars ./deploy/helm/avatars \
+  --namespace avatars \
+  --create-namespace
+```
+
+### 4. Проверка
+
+```bash
+kubectl get pods -n avatars
+kubectl port-forward svc/avatars-api -n avatars 8080:80
+curl http://localhost:8080/health
+```
+
+Чарт (`deploy/helm/avatars/`): Deployment, Service, Ingress, ConfigMap, Secret, HPA, ServiceMonitor, NetworkPolicy, RBAC, hook миграций.
+
+### 5. Ingress
+
+Добавьте в `C:\Windows\System32\drivers\etc\hosts`:
+
+```text
+127.0.0.1 avatars.example.com
+```
+
+Проверка через NGINX Ingress (NodePort `30080`):
+
+```bash
+curl http://avatars.example.com:30080/health
+```
+
+### 6. Мониторинг в Kubernetes
+
+- **ServiceMonitor** (`servicemonitor.yaml`) — Prometheus Operator собирает `/metrics` с API и worker.
+- **Prometheus:** `kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090`
+- **Grafana:** `kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80` → импорт `grafana/dashboards/avatars-overview.json`
+- **Алерты:** правила в `prometheus-alerts.yml` (HighErrorRate, HighResponseTime, QueueBacklog)
+
+## API документация
+
+OpenAPI спецификация: [api/openapi.yaml](api/openapi.yaml)
+
 ## Локальный запуск без Docker (API + worker)
 
 ```bash
@@ -205,8 +306,9 @@ grafana/dashboards/ — Grafana-дашборды
 scripts/minio-init/ — init-образ: создание S3 bucket при старте compose
 docker-compose.yml   — сервис migrate: применение SQL-миграций перед api/worker
 prometheus-alerts.yml — alert rules для Prometheus
+deploy/helm/avatars/ — Helm chart для Kubernetes
+api/openapi.yaml — OpenAPI спецификация
 ```
-
 
 ## Автор
 

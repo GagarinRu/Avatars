@@ -1,0 +1,248 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "avatars.fullname" . }}-config
+data:
+  log_level: info
+  max_upload_bytes: "5242880"
+  allowed_mime_types: "image/jpeg,image/png,image/webp"
+  s3_bucket: {{ .Values.s3.bucket | quote }}
+  s3_region: {{ .Values.s3.region | quote }}
+  s3_endpoint: {{ include "avatars.s3Endpoint" . | quote }}
+  s3_public_endpoint: {{ .Values.s3.publicEndpoint | quote }}
+  s3_use_ssl: "false"
+  rabbitmq_mgmt_port: {{ .Values.rabbitmq.managementPort | quote }}
+  rabbitmq_user: {{ .Values.rabbitmq.user | quote }}
+  metrics_address: ":9091"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "avatars.fullname" . }}-secrets
+type: Opaque
+stringData:
+  database-url: {{ include "avatars.databaseDSN" . | quote }}
+  rabbitmq-url: {{ include "avatars.rabbitmqURL" . | quote }}
+  s3-access-key: {{ .Values.s3.accessKey | quote }}
+  s3-secret-key: {{ .Values.s3.secretKey | quote }}
+  rabbitmq-password: {{ .Values.rabbitmq.password | quote }}
+---
+{{- $configMap := printf "%s-config" (include "avatars.fullname" .) }}
+{{- $secret := printf "%s-secrets" (include "avatars.fullname" .) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "avatars.fullname" . }}-api
+  labels:
+    app: avatars-api
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector:
+    matchLabels:
+      app: avatars-api
+  template:
+    metadata:
+      labels:
+        app: avatars-api
+    spec:
+      serviceAccountName: {{ include "avatars.fullname" . }}
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: api
+          image: "{{ .Values.image.api.repository }}:{{ .Values.image.api.tag }}"
+          imagePullPolicy: {{ .Values.image.api.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: DATABASE_DSN
+              valueFrom:
+                secretKeyRef: { name: {{ $secret }}, key: database-url }
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef: { name: {{ $secret }}, key: rabbitmq-url }
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ $secret }}, key: s3-access-key }
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ $secret }}, key: s3-secret-key }
+            - name: S3_BUCKET
+              valueFrom:
+                configMapKeyRef: { name: {{ $configMap }}, key: s3_bucket }
+            - name: S3_REGION
+              valueFrom:
+                configMapKeyRef: { name: {{ $configMap }}, key: s3_region }
+            - name: S3_ENDPOINT
+              valueFrom:
+                configMapKeyRef: { name: {{ $configMap }}, key: s3_endpoint }
+            - name: S3_PUBLIC_ENDPOINT
+              valueFrom:
+                configMapKeyRef: { name: {{ $configMap }}, key: s3_public_endpoint }
+            - name: S3_USE_SSL
+              valueFrom:
+                configMapKeyRef: { name: {{ $configMap }}, key: s3_use_ssl }
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef: { name: {{ $configMap }}, key: log_level }
+            - name: MAX_UPLOAD_BYTES
+              valueFrom:
+                configMapKeyRef: { name: {{ $configMap }}, key: max_upload_bytes }
+            - name: ADDRESS
+              value: ":8080"
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 30
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 5
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "avatars.fullname" . }}-worker
+  labels:
+    app: avatars-worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      app: avatars-worker
+  template:
+    metadata:
+      labels:
+        app: avatars-worker
+    spec:
+      serviceAccountName: {{ include "avatars.fullname" . }}
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: worker
+          image: "{{ .Values.image.worker.repository }}:{{ .Values.image.worker.tag }}"
+          imagePullPolicy: {{ .Values.image.worker.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.worker.metricsPort }}
+          env:
+            - name: DATABASE_DSN
+              valueFrom:
+                secretKeyRef: { name: {{ $secret }}, key: database-url }
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef: { name: {{ $secret }}, key: rabbitmq-url }
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ $secret }}, key: s3-access-key }
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ $secret }}, key: s3-secret-key }
+            - name: RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ $secret }}, key: rabbitmq-password }
+            - name: S3_BUCKET
+              valueFrom:
+                configMapKeyRef: { name: {{ $configMap }}, key: s3_bucket }
+            - name: S3_REGION
+              valueFrom:
+                configMapKeyRef: { name: {{ $configMap }}, key: s3_region }
+            - name: S3_ENDPOINT
+              valueFrom:
+                configMapKeyRef: { name: {{ $configMap }}, key: s3_endpoint }
+            - name: S3_PUBLIC_ENDPOINT
+              valueFrom:
+                configMapKeyRef: { name: {{ $configMap }}, key: s3_public_endpoint }
+            - name: S3_USE_SSL
+              valueFrom:
+                configMapKeyRef: { name: {{ $configMap }}, key: s3_use_ssl }
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef: { name: {{ $configMap }}, key: log_level }
+            - name: METRICS_ADDRESS
+              valueFrom:
+                configMapKeyRef: { name: {{ $configMap }}, key: metrics_address }
+            - name: RABBITMQ_MGMT_PORT
+              valueFrom:
+                configMapKeyRef: { name: {{ $configMap }}, key: rabbitmq_mgmt_port }
+            - name: RABBITMQ_USER
+              valueFrom:
+                configMapKeyRef: { name: {{ $configMap }}, key: rabbitmq_user }
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          livenessProbe:
+            httpGet: { path: /metrics, port: metrics }
+            initialDelaySeconds: 30
+          readinessProbe:
+            httpGet: { path: /metrics, port: metrics }
+            initialDelaySeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "avatars.fullname" . }}-api
+  labels:
+    app: avatars-api
+spec:
+  type: ClusterIP
+  selector:
+    app: avatars-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+    - name: metrics
+      port: 8080
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "avatars.fullname" . }}-worker
+  labels:
+    app: avatars-worker
+spec:
+  type: ClusterIP
+  selector:
+    app: avatars-worker
+  ports:
+    - name: metrics
+      port: {{ .Values.worker.metricsPort }}
+      targetPort: metrics
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "avatars.fullname" . }}-ingress
+  annotations:
+    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "avatars.fullname" . }}-api
+                port:
+                  number: 80

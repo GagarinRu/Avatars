@@ -1,0 +1,25 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "avatars.fullname" . }}-api
+spec:
+  selector:
+    matchLabels:
+      app: avatars-api
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "avatars.fullname" . }}-worker
+spec:
+  selector:
+    matchLabels:
+      app: avatars-worker
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
