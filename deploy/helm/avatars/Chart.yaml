@@ -1,0 +1,6 @@
+apiVersion: v2
+name: avatars
+description: Helm chart for Avatars API, worker and dependencies
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

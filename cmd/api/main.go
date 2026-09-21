@@ -128,7 +128,7 @@ func run() int {
 	h := handler.NewHandler(store, objects, publisher, opts.MaxUploadBytes)
 	mux := handler.NewMux(h)
 
-	apiHandler := metrics.HTTPMiddleware(otelhttp.NewHandler(mux, "avatars-api"))
+	apiHandler := metrics.HTTPMiddleware(otelhttp.NewHandler(handler.UploadRateLimitMiddleware(mux), "avatars-api"))
 	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/metrics" {
 			promhttp.Handler().ServeHTTP(w, r)

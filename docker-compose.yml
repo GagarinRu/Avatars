@@ -40,7 +40,7 @@ services:
   minio:
     container_name: avatars.minio
     hostname: avatars.minio
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     restart: unless-stopped
     command: server /data --console-address ":9001"
     env_file:
