@@ -11,7 +11,8 @@ const (
 	defaultS3AccessKey   = "minioadmin"
 	defaultS3SecretKey   = "minioadmin"
 	defaultS3Region      = "us-east-1"
-	defaultMaxUploadSize = 5 * 1024 * 1024 // 5 MiB
+	defaultMaxUploadSize            = 5 * 1024 * 1024 // 5 MiB
+	defaultUploadRateLimitPerMinute = 30
 )
 
 // AppJSON is the JSON config format shared by API and worker.
@@ -31,7 +32,8 @@ type AppJSON struct {
 	S3Region          string `json:"s3_region"`
 	S3PublicEndpoint  string `json:"s3_public_endpoint"`
 	S3UseSSL          *bool  `json:"s3_use_ssl"`
-	MaxUploadBytes int64  `json:"max_upload_bytes"`
+	MaxUploadBytes           int64 `json:"max_upload_bytes"`
+	UploadRateLimitPerMinute int   `json:"upload_rate_limit_per_minute"`
 }
 
 // AppOptions holds resolved application configuration.
@@ -51,7 +53,8 @@ type AppOptions struct {
 	S3Region         string
 	S3PublicEndpoint string
 	S3UseSSL         bool
-	MaxUploadBytes int64
+	MaxUploadBytes           int64
+	UploadRateLimitPerMinute int
 }
 
 func ReadAppJSON(path string) (AppJSON, error) {
@@ -85,6 +88,9 @@ func ApplyAppJSON(opts AppOptions, file AppJSON) AppOptions {
 	if file.MaxUploadBytes > 0 {
 		opts.MaxUploadBytes = file.MaxUploadBytes
 	}
+	if file.UploadRateLimitPerMinute > 0 {
+		opts.UploadRateLimitPerMinute = file.UploadRateLimitPerMinute
+	}
 	return opts
 }
 
@@ -105,6 +111,7 @@ func ApplyAppEnv(opts AppOptions) AppOptions {
 	opts.S3PublicEndpoint = envString("S3_PUBLIC_ENDPOINT", opts.S3PublicEndpoint)
 	opts.S3UseSSL = envBool("S3_USE_SSL", opts.S3UseSSL)
 	opts.MaxUploadBytes = envInt64("MAX_UPLOAD_BYTES", opts.MaxUploadBytes)
+	opts.UploadRateLimitPerMinute = envInt("UPLOAD_RATE_LIMIT_PER_MINUTE", opts.UploadRateLimitPerMinute)
 	return opts
 }
 
@@ -121,7 +128,8 @@ func DefaultAppOptions() AppOptions {
 		S3SecretKey:    defaultS3SecretKey,
 		S3Region:       defaultS3Region,
 		S3UseSSL:       false,
-		MaxUploadBytes: defaultMaxUploadSize,
+		MaxUploadBytes:           defaultMaxUploadSize,
+		UploadRateLimitPerMinute: defaultUploadRateLimitPerMinute,
 	}
 	return ApplyAppEnv(opts)
 }

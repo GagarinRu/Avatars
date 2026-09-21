@@ -35,12 +35,11 @@ type Publisher interface {
 }
 
 type Handler struct {
-	store      storage.Storage
-	objects    ObjectStore
-	publisher  Publisher
-	maxUpload  int64
-	urlExpiry  time.Duration
-	dbBreaker  *resilience.Breaker
+	store     storage.Storage
+	objects   ObjectStore
+	publisher Publisher
+	maxUpload int64
+	urlExpiry time.Duration
 }
 
 func NewHandler(store storage.Storage, objects ObjectStore, publisher Publisher, maxUpload int64) *Handler {
@@ -53,7 +52,6 @@ func NewHandler(store storage.Storage, objects ObjectStore, publisher Publisher,
 		publisher: publisher,
 		maxUpload: maxUpload,
 		urlExpiry: 15 * time.Minute,
-		dbBreaker: resilience.NewBreaker(5, 30*time.Second),
 	}
 }
 
@@ -257,9 +255,7 @@ func (h *Handler) DeleteAvatar(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Ping(w http.ResponseWriter, r *http.Request) {
-	err := h.dbBreaker.Call(func() error {
-		return h.store.Ping(r.Context())
-	})
+	err := h.store.Ping(r.Context())
 	if err != nil {
 		if errors.Is(err, resilience.ErrOpen) {
 			writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database circuit open"})
