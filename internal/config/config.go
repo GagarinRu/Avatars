@@ -64,6 +64,18 @@ func envString(key, fallback string) string {
 	return fallback
 }
 
+func envInt(key string, fallback int) int {
+	raw := envString(key, "")
+	if raw == "" {
+		return fallback
+	}
+	var v int
+	if _, err := fmt.Sscanf(raw, "%d", &v); err != nil {
+		return fallback
+	}
+	return v
+}
+
 func envInt64(key string, fallback int64) int64 {
 	raw := envString(key, "")
 	if raw == "" {

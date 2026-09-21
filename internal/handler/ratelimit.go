@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -50,11 +51,49 @@ func (l *uploadRateLimiter) allow() bool {
 	return true
 }
 
-func UploadRateLimitMiddleware(next http.Handler) http.Handler {
-	limiter := newUploadRateLimiter(30)
+type uploadRateLimitRegistry struct {
+	mu                sync.Mutex
+	buckets           map[string]*uploadRateLimiter
+	requestsPerMinute int
+}
+
+func newUploadRateLimitRegistry(requestsPerMinute int) *uploadRateLimitRegistry {
+	return &uploadRateLimitRegistry{
+		buckets:           make(map[string]*uploadRateLimiter),
+		requestsPerMinute: requestsPerMinute,
+	}
+}
+
+func (r *uploadRateLimitRegistry) allow(clientKey string) bool {
+	r.mu.Lock()
+	limiter, ok := r.buckets[clientKey]
+	if !ok {
+		limiter = newUploadRateLimiter(r.requestsPerMinute)
+		r.buckets[clientKey] = limiter
+	}
+	r.mu.Unlock()
+	return limiter.allow()
+}
+
+func clientKey(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := strings.Index(xff, ","); i >= 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return strings.TrimSpace(xff)
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+func UploadRateLimitMiddleware(requestsPerMinute int, next http.Handler) http.Handler {
+	registry := newUploadRateLimitRegistry(requestsPerMinute)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && isAvatarUploadPath(r.URL.Path) {
-			if !limiter.allow() {
+			if !registry.allow(clientKey(r)) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusTooManyRequests)
 				_, _ = w.Write([]byte(`{"error":"rate limit exceeded"}`))

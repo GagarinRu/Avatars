@@ -16,6 +16,7 @@ import (
 	"github.com/GagarinRu/avatars/internal/metrics"
 	"github.com/GagarinRu/avatars/internal/objectstore"
 	"github.com/GagarinRu/avatars/internal/queue"
+	"github.com/GagarinRu/avatars/internal/resilience"
 	"github.com/GagarinRu/avatars/internal/storage"
 	"github.com/GagarinRu/avatars/internal/telemetry"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -89,12 +90,14 @@ func run() int {
 		return 1
 	}
 
-	store, err := storage.NewPostgresStorage(opts.DatabaseDSN)
+	pgStore, err := storage.NewPostgresStorage(opts.DatabaseDSN)
 	if err != nil {
 		slog.Error("failed to connect to database", "error", err)
 		return 1
 	}
-	defer func() { _ = store.Close() }()
+	defer func() { _ = pgStore.Close() }()
+
+	store := storage.NewBreakerStorage(pgStore, resilience.NewBreaker(5, 30*time.Second))
 
 	objects, err := objectstore.NewClient(objectstore.Config{
 		Endpoint:       opts.S3Endpoint,
@@ -128,7 +131,10 @@ func run() int {
 	h := handler.NewHandler(store, objects, publisher, opts.MaxUploadBytes)
 	mux := handler.NewMux(h)
 
-	apiHandler := metrics.HTTPMiddleware(otelhttp.NewHandler(handler.UploadRateLimitMiddleware(mux), "avatars-api"))
+	apiHandler := metrics.HTTPMiddleware(otelhttp.NewHandler(
+		handler.UploadRateLimitMiddleware(opts.UploadRateLimitPerMinute, mux),
+		"avatars-api",
+	))
 	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/metrics" {
 			promhttp.Handler().ServeHTTP(w, r)
